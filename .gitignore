@@ -1,0 +1,70 @@
+# Virtual Environment
+mbtiles/
+venv/
+env/
+ENV/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Logs
+*.log
+maploom.log
+
+# Temporary files
+*.tmp
+*.bak
+.temp/
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.mbtiles.bak
+*.mbtiles.lock
+.kiro/
+
+# Configuration (for future)
+# config/settings.yaml  # Uncomment if created

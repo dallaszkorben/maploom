@@ -1,0 +1,77 @@
+# MapLoom - MBTiles Viewer and Zoom Level Generator
+# Requirements file for Python dependencies
+#
+# Usage:
+#   pip install -r requirements.txt
+#
+# Created: 2026-10-11
+
+# ==============================================================================
+# Core GUI Framework
+# ==============================================================================
+
+PyQt5==5.15.7              # PyQt5 GUI framework
+PyQtWebEngine==5.15.7      # Web engine for map rendering
+Pillow==12.3.0             # Image processing for tile manipulation
+
+# ==============================================================================
+# Map Tile Management
+# ==============================================================================
+
+# Note: Using sqlite3 (standard library) to read/write MBTiles files
+# MBTiles format is SQLite-based, direct SQL queries used
+
+# ==============================================================================
+# Image Processing & Resampling
+# ==============================================================================
+
+# Note: Using PIL/Pillow (already included above) for tile resampling
+# Supports zoom level interpolation and downsampling
+
+# ==============================================================================
+# Configuration Management
+# ==============================================================================
+
+PyYAML==6.0.1              # YAML file parsing (for future settings support)
+
+# ==============================================================================
+# Testing & Development
+# ==============================================================================
+
+pytest==7.4.3              # Unit testing framework
+pytest-timeout==2.1.0      # Timeout plugin for pytest
+
+# ==============================================================================
+# Documentation
+# ==============================================================================
+
+# No additional dependencies for Markdown documentation
+
+# ==============================================================================
+# Python Version Requirement
+# ==============================================================================
+
+# Python >= 3.10 required
+# Tested with: Python 3.10.x, 3.12.x
+
+# ==============================================================================
+# Installation Instructions
+# ==============================================================================
+
+# 1. Create virtual environment:
+#    python3 -m venv venv
+#
+# 2. Activate virtual environment:
+#    source venv/bin/activate  (Linux/Mac)
+#    venv\Scripts\activate     (Windows)
+#
+# 3. Install dependencies:
+#    pip install -r requirements.txt
+#
+# 4. Verify installation:
+#    python -c "import PyQt5; import PIL; print('✅ All dependencies installed')"
+#
+# 5. Run application:
+#    python src/main.py
+#
+# ==============================================================================

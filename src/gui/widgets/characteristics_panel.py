@@ -1,0 +1,337 @@
+"""
+Characteristics Panel Widget
+
+Displays MBTiles file information and zoom levels.
+Scrollable left panel showing metadata and statistics.
+
+Author: Development Team
+Date: 2026-10-11
+"""
+
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QScrollArea, QLabel, QFrame,
+    QGroupBox, QGridLayout, QListWidget, QListWidgetItem,
+    QHeaderView
+)
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont, QColor, QIcon
+from src.core.mbtiles_reader import MBTilesReader, MBTilesMetadata
+import logging
+
+
+logger = logging.getLogger(__name__)
+
+
+class ZoomLevelItem(QListWidgetItem):
+    """Custom list item for zoom level display."""
+    
+    def __init__(self, zoom_level_info):
+        """
+        Initialize zoom level item.
+        
+        Args:
+            zoom_level_info: ZoomLevelInfo object with zoom, tile_count, is_original
+        """
+        super().__init__()
+        
+        self.zoom_info = zoom_level_info
+        
+        # Format display text
+        zoom = zoom_level_info.zoom
+        tiles = zoom_level_info.tile_count
+        status = "✓ Original" if zoom_level_info.is_original else "◆ Generated"
+        
+        text = f"Z{zoom:2d}  {tiles:>6,} tiles  {status}"
+        self.setText(text)
+        
+        # Use monospace font
+        font = QFont("Courier")
+        font.setPointSize(9)
+        self.setFont(font)
+        
+        # Color-code (use white/light colors for visibility)
+        if zoom_level_info.is_original:
+            self.setForeground(QColor("#FFFFFF"))  # White for original
+        else:
+            self.setForeground(QColor("#66CCFF"))  # Light blue for generated
+        
+        # Use smaller font for generated
+        if not zoom_level_info.is_original:
+            font.setItalic(True)
+            self.setFont(font)
+
+
+class CharacteristicsPanel(QWidget):
+    """
+    Left panel displaying MBTiles file characteristics.
+    
+    Responsibilities:
+        - Display file metadata (name, description, format, etc.)
+        - Show zoom levels with indicators (original vs generated)
+        - Display file statistics
+        - Scrollable for all content
+    """
+    
+    zoom_selected = pyqtSignal(int)  # Emitted when zoom level is selected
+    
+    def __init__(self, parent=None):
+        """Initialize characteristics panel."""
+        super().__init__(parent)
+        
+        self.mbtiles_reader: Optional[MBTilesReader] = None
+        
+        self._setup_ui()
+        logger.debug("CharacteristicsPanel initialized")
+    
+    
+    def _setup_ui(self) -> None:
+        """Setup the user interface."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Set dark background for the widget
+        self.setStyleSheet("""
+            CharacteristicsPanel {
+                background-color: #2b2b2b;
+                color: #FFFFFF;
+            }
+            QGroupBox {
+                color: #FFFFFF;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 3px 0 3px;
+            }
+            QLabel {
+                color: #FFFFFF;
+            }
+        """)
+        
+        # Create scroll area for all content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background-color: #2b2b2b; }")
+        
+        # Container widget inside scroll
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(8, 8, 8, 8)
+        container.setStyleSheet("background-color: #2b2b2b;")
+        
+        # Title
+        title = QLabel("File Characteristics")
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setStyleSheet("color: #FFFFFF;")
+        container_layout.addWidget(title)
+        
+        # File Info Section
+        file_info_group = QGroupBox("File Information")
+        file_info_layout = QGridLayout(file_info_group)
+        
+        self.name_label = self._create_info_label()
+        self.description_label = self._create_info_label()
+        self.format_label = self._create_info_label()
+        self.type_label = self._create_info_label()
+        self.version_label = self._create_info_label()
+        
+        file_info_layout.addWidget(QLabel("Name:"), 0, 0, Qt.AlignRight)
+        file_info_layout.addWidget(self.name_label, 0, 1)
+        file_info_layout.addWidget(QLabel("Description:"), 1, 0, Qt.AlignRight)
+        file_info_layout.addWidget(self.description_label, 1, 1)
+        file_info_layout.addWidget(QLabel("Format:"), 2, 0, Qt.AlignRight)
+        file_info_layout.addWidget(self.format_label, 2, 1)
+        file_info_layout.addWidget(QLabel("Type:"), 3, 0, Qt.AlignRight)
+        file_info_layout.addWidget(self.type_label, 3, 1)
+        file_info_layout.addWidget(QLabel("Version:"), 4, 0, Qt.AlignRight)
+        file_info_layout.addWidget(self.version_label, 4, 1)
+        
+        file_info_layout.setColumnStretch(1, 1)
+        container_layout.addWidget(file_info_group)
+        
+        # Map Bounds Section
+        bounds_group = QGroupBox("Map Bounds")
+        bounds_layout = QGridLayout(bounds_group)
+        
+        self.bounds_label = self._create_info_label()
+        self.center_label = self._create_info_label()
+        
+        bounds_layout.addWidget(QLabel("Bounds:"), 0, 0, Qt.AlignRight)
+        bounds_layout.addWidget(self.bounds_label, 0, 1)
+        bounds_layout.addWidget(QLabel("Center:"), 1, 0, Qt.AlignRight)
+        bounds_layout.addWidget(self.center_label, 1, 1)
+        
+        bounds_layout.setColumnStretch(1, 1)
+        container_layout.addWidget(bounds_group)
+        
+        # Zoom Levels Section
+        zoom_group = QGroupBox("Zoom Levels")
+        zoom_layout = QVBoxLayout(zoom_group)
+        
+        zoom_info = QLabel(
+            "✓ Original - Available in file\n"
+            "◆ Generated - Created by MapLoom"
+        )
+        zoom_info.setStyleSheet("color: #CCCCCC;")
+        zoom_layout.addWidget(zoom_info)
+        
+        self.zoom_list = QListWidget()
+        self.zoom_list.setMinimumHeight(150)
+        self.zoom_list.setStyleSheet("""
+            QListWidget {
+                background-color: #1e1e1e;
+                color: #FFFFFF;
+                border: 1px solid #444444;
+            }
+            QListWidget::item {
+                padding: 2px;
+            }
+        """)
+        self.zoom_list.itemSelectionChanged.connect(self._on_zoom_selected)
+        zoom_layout.addWidget(self.zoom_list)
+        
+        container_layout.addWidget(zoom_group)
+        
+        # Statistics Section
+        stats_group = QGroupBox("Statistics")
+        stats_layout = QGridLayout(stats_group)
+        
+        self.total_tiles_label = self._create_info_label()
+        self.zoom_range_label = self._create_info_label()
+        self.file_size_label = self._create_info_label()
+        self.missing_zooms_label = self._create_info_label()
+        
+        stats_layout.addWidget(QLabel("Total Tiles:"), 0, 0, Qt.AlignRight)
+        stats_layout.addWidget(self.total_tiles_label, 0, 1)
+        stats_layout.addWidget(QLabel("Zoom Range:"), 1, 0, Qt.AlignRight)
+        stats_layout.addWidget(self.zoom_range_label, 1, 1)
+        stats_layout.addWidget(QLabel("File Size:"), 2, 0, Qt.AlignRight)
+        stats_layout.addWidget(self.file_size_label, 2, 1)
+        stats_layout.addWidget(QLabel("Missing Zooms:"), 3, 0, Qt.AlignRight)
+        stats_layout.addWidget(self.missing_zooms_label, 3, 1)
+        
+        stats_layout.setColumnStretch(1, 1)
+        container_layout.addWidget(stats_group)
+        
+        # Stretch remaining space
+        container_layout.addStretch()
+        
+        # Add container to scroll area
+        scroll.setWidget(container)
+        
+        # Add scroll area to main layout
+        layout.addWidget(scroll)
+        
+        logger.debug("UI setup complete")
+    
+    
+    def _create_info_label(self) -> QLabel:
+        """Create a styled info label."""
+        label = QLabel("—")
+        label.setWordWrap(True)
+        label.setStyleSheet("color: #FFFFFF; font-family: monospace; background-color: #1e1e1e; padding: 2px;")
+        return label
+    
+    
+    def load_mbtiles(self, reader: MBTilesReader) -> None:
+        """
+        Load and display MBTiles file information.
+        
+        Args:
+            reader (MBTilesReader): MBTiles reader with loaded file
+        """
+        self.mbtiles_reader = reader
+        
+        # Get metadata
+        metadata = reader.get_metadata()
+        
+        # Update file info
+        self.name_label.setText(metadata.name or "Unknown")
+        self.description_label.setText(metadata.description if metadata.description else "(not set in file)")
+        self.format_label.setText(metadata.format or "unknown")
+        self.type_label.setText(metadata.type or "baselayer")
+        self.version_label.setText(metadata.version if metadata.version else "(not set in file)")
+        
+        # Update bounds
+        if metadata.bounds:
+            west, south, east, north = metadata.bounds
+            self.bounds_label.setText(f"W:{west:.2f}° S:{south:.2f}° E:{east:.2f}° N:{north:.2f}°")
+        else:
+            self.bounds_label.setText("(not set in file)")
+        
+        # Update center
+        if metadata.center:
+            lon, lat, zoom = metadata.center
+            self.center_label.setText(f"({lon:.2f}°, {lat:.2f}°) at Z{zoom}")
+        else:
+            self.center_label.setText("(not set in file)")
+        
+        # Update zoom levels
+        self.zoom_list.clear()
+        for zoom_info in reader.get_zoom_levels():
+            item = ZoomLevelItem(zoom_info)
+            self.zoom_list.addItem(item)
+        
+        # Update statistics
+        stats = reader.get_file_statistics()
+        self.total_tiles_label.setText(f"{stats['total_tiles']:,}")
+        
+        min_z, max_z = stats['zoom_range']
+        self.zoom_range_label.setText(f"Z{min_z} - Z{max_z}")
+        
+        file_size_mb = stats['file_size_mb']
+        if file_size_mb < 1:
+            size_text = f"{stats['file_size'] / 1024:.1f} KB"
+        else:
+            size_text = f"{file_size_mb:.1f} MB"
+        self.file_size_label.setText(size_text)
+        
+        missing = reader.get_missing_zooms()
+        if missing:
+            missing_str = ", ".join(f"Z{z}" for z in missing[:10])
+            if len(missing) > 10:
+                missing_str += f", ... ({len(missing) - 10} more)"
+            self.missing_zooms_label.setText(missing_str)
+        else:
+            self.missing_zooms_label.setText("—")
+        
+        logger.info(f"Loaded characteristics for: {metadata.name}")
+    
+    
+    def _on_zoom_selected(self) -> None:
+        """Handle zoom level selection."""
+        current = self.zoom_list.currentItem()
+        if current and isinstance(current, ZoomLevelItem):
+            zoom = current.zoom_info.zoom
+            self.zoom_selected.emit(zoom)
+            logger.debug(f"Zoom selected: {zoom}")
+    
+    
+    def clear(self) -> None:
+        """Clear all displayed information."""
+        self.mbtiles_reader = None
+        
+        self.name_label.setText("—")
+        self.description_label.setText("—")
+        self.format_label.setText("—")
+        self.type_label.setText("—")
+        self.version_label.setText("—")
+        
+        self.bounds_label.setText("—")
+        self.center_label.setText("—")
+        
+        self.zoom_list.clear()
+        
+        self.total_tiles_label.setText("—")
+        self.zoom_range_label.setText("—")
+        self.file_size_label.setText("—")
+        self.missing_zooms_label.setText("—")
+        
+        logger.debug("Cleared characteristics panel")
