@@ -118,11 +118,17 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.characteristics_panel)
         splitter.addWidget(self.map_viewer)
         
-        # Set fixed sizes - characteristics panel narrow, map wider
+        # Set initial sizes - characteristics panel narrow, map wider
         # Use CourseStudio's approach: [left_width, right_width]
         splitter.setSizes([300, 700])
-        splitter.setCollapsible(0, False)
-        splitter.setCollapsible(1, False)
+        
+        # Allow panels to be resizable (stretch proportionally when window resizes)
+        splitter.setStretchFactor(0, 1)  # Characteristics panel can expand/shrink
+        splitter.setStretchFactor(1, 2)  # Map panel gets 2x more space by default
+        
+        # Don't prevent collapse - but you can if needed
+        # splitter.setCollapsible(0, False)
+        # splitter.setCollapsible(1, False)
         
         # Add splitter to main layout
         main_layout.addWidget(splitter)

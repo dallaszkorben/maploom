@@ -59,6 +59,11 @@ class MapViewer(QWidget):
         self.map_label.setStyleSheet("background-color: #c0c0c0;")
         self.map_label.setScaledContents(True)
         
+        # ✅ Allow map to shrink and expand - match CourseStudio
+        from PyQt5.QtWidgets import QSizePolicy
+        self.map_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.map_label.setMinimumSize(1, 1)  # Allow to shrink to 1x1 pixel if needed
+        
         # Create control buttons - REAL QPushButton widgets
         self.zoom_in_button = QPushButton("+", self)
         self.zoom_in_button.setFixedSize(self.ZOOM_BUTTON_SIZE, self.ZOOM_BUTTON_SIZE)
@@ -300,6 +305,11 @@ class MapViewer(QWidget):
             
             logger.debug(f"Zoomed to Z{self.zoom_level} at cursor position")
             self.render_map()
+    
+    def resizeEvent(self, event):
+        """Handle window resize - re-render map with new dimensions."""
+        super().resizeEvent(event)
+        self.render_map()
     
     def render_map(self):
         """Render the map to display."""
