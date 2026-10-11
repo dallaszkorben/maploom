@@ -210,51 +210,185 @@ def _verify_generation_complete(self, target_zoom):
 
 ---
 
+## Problem 3: Generated Zoom Tiles Display with Vertical Stripe Misalignment
+
+### Issue Description
+
+**Date Discovered:** 2026-10-11  
+**Severity:** Critical  
+**Status:** FIXED ✅
+
+Generated Z9 tiles appeared to have horizontally-scrambled vertical stripes. The map showed:
+- Horizontal stripes that didn't align with each other vertically
+- "Every second stripe belongs together but in opposite order"
+- Vertical misalignment only; horizontal alignment was correct
+- Original Z10 tiles displayed correctly
+
+### Investigation Process
+
+**Initial Hypothesis:** Downsampling algorithm has Y-axis inversion bug
+- Tried reversing row order during composition
+- Tried flipping tiles vertically
+- Tried swapping row/column interpretation
+- **All attempts failed** - same visual issue
+
+**Key Observation:** Z9 tile pixel analysis showed:
+```
+Z9 quadrant colors EXACTLY matched Z10 source tiles
+=> Downsampling was working correctly!
+```
+
+**Breakthrough:** Examined edge continuity of ORIGINAL Z10 tiles:
+```
+Adjacent Z10 rows (696→697) had discontinuous edges:
+  Diff: 6161 (very different)
+But reversed interpretation (697 bottom→696 top):
+  Diff: 333 (much better!)
+```
+
+This seemed to suggest Z10 was stored upside-down. But wait... Z10 displayed correctly!
+
+**Final Insight:** Checked the tile viewer's coordinate conversion:
+
+```python
+# From mbtiles_provider.py get_tile():
+max_tile_y = (2 ** zoom) - 1
+tms_y = max_tile_y - y  # ← TMS conversion formula
+```
+
+The viewer applies TMS Y-axis inversion when displaying tiles!
+
+### Root Cause
+
+**Two-part problem:**
+
+1. **The viewer applies TMS conversion** - It inverts the Y-axis for display:
+   ```
+   tms_y = (2^zoom - 1) - y
+   ```
+
+2. **Generated tiles weren't compensated** - When downsampling Z10→Z9:
+   - Z10 tiles stored in database get inverted by viewer
+   - Z9 tiles also get inverted by viewer
+   - But Z9 is composed from Z10 tiles in normal order
+   - Result: Z9 quadrants are in wrong positions after inversion!
+
+### Why Initial Debugging Failed
+
+- Focused on downsampling code (which was correct!)
+- Didn't realize the viewer was applying transformations
+- Tile pixel data matched source (composition was working!)
+- The misalignment happened at DISPLAY time, not generation time
+
+### Solution: Compensate During Downsampling
+
+Instead of trying to fix the viewer's conversion (which is correct for other MBTiles files), **compensate during downsampling** by swapping quadrant positions:
+
+**Normal downsampling:**
+```
+Z10 sources                Canvas placement
+(col*2, row*2)      →      (0, 0)     [TOP-LEFT]
+(col*2+1, row*2)    →      (256, 0)   [TOP-RIGHT]
+(col*2, row*2+1)    →      (0, 256)   [BOTTOM-LEFT]
+(col*2+1, row*2+1)  →      (256, 256) [BOTTOM-RIGHT]
+```
+
+**Compensated downsampling:**
+```
+Z10 sources                Canvas placement (SWAPPED)
+(col*2, row*2)      →      (0, 256)   [BOTTOM-LEFT] ← swapped
+(col*2+1, row*2)    →      (256, 256) [BOTTOM-RIGHT]← swapped
+(col*2, row*2+1)    →      (0, 0)     [TOP-LEFT]    ← swapped
+(col*2+1, row*2+1)  →      (256, 0)   [TOP-RIGHT]   ← swapped
+```
+
+**Why this works:**
+1. Z9 tile is composed with top/bottom swapped
+2. Viewer later applies TMS inversion (top↔bottom)
+3. Inversion cancels the swap: correct positions!
+
+**Implementation:**
+
+```python
+# In tile_processor.py downsample_tile()
+source_tiles_db = [
+    (target_column * 2,     target_row * 2),
+    (target_column * 2 + 1, target_row * 2),
+    (target_column * 2,     target_row * 2 + 1),
+    (target_column * 2 + 1, target_row * 2 + 1)
+]
+
+# SWAP top and bottom to compensate for viewer's TMS conversion
+canvas_positions = [
+    (0, 256),      # Bottom-left (will become top after inversion)
+    (256, 256),    # Bottom-right
+    (0, 0),        # Top-left (will become bottom after inversion)
+    (256, 0)       # Top-right
+]
+
+for i, (src_col, src_row) in enumerate(source_tiles_db):
+    tile_image = fetch_tile(source_zoom, src_col, src_row)
+    canvas.paste(tile_image, canvas_positions[i])
+```
+
+### Key Insights
+
+1. **Coordinate systems matter** - Viewer and database don't necessarily use same convention
+2. **Composition happens before display** - Fix at generation time, not display time
+3. **Symmetry is powerful** - Swapping top/bottom twice returns to original
+4. **Test with actual display** - Pixel data analysis alone wasn't enough
+
+### Why Z10 Displayed Correctly
+
+- Z10 tiles in database are already "correct" for the viewer's inversion
+- Viewer inverts them, and they display correctly
+- No composition happening (they're original, not generated)
+
+### Why Z9 Initially Looked Wrong
+
+- Z9 composed from Z10 in standard order
+- Viewer inverted Z9 tiles
+- But inversion happened on already-composed (and inverted) quadrants
+- Result: double inversion created misalignment
+
+### Testing
+
+- ✅ Z9 tiles now display with correct vertical alignment
+- ✅ Horizontal stripes align properly
+- ✅ Geographic accuracy maintained
+- ✅ Z10 original tiles still display correctly
+- ✅ Both Z8 and Z9 show seamless tile boundaries
+
+### Generalization
+
+**This is specific to this OSM-OpenCPN2-Baltic MBTiles file**, which uses a coordinate system that the viewer's conversion handles correctly for original tiles but not for generated tiles.
+
+If using other MBTiles files:
+- Test with original zooms first (should display correctly)
+- If they display correctly, use this compensation
+- If they display upside-down, may need different approach
+
+---
+
 ## Lessons Learned
 
-### 1. Database Atomicity is Critical
-- Never write production data incrementally
-- Use temporary storage for in-progress work
-- Atomic final commit to real database
+### Lessons Learned from All Problems
 
-### 2. Handle Interruption Gracefully
-- App crashes and cancellations are inevitable
-- Design for clean recovery
-- Leave no traces in real data if interrupted
-
-### 3. Disk Better Than Memory for Large Operations
-- MBTiles can be huge (Z12+ has billions of tiles)
-- Temporary database on disk scales better than memory
-- Trade disk I/O for memory safety
-
-### 4. Verification is Essential
-- Don't assume generation completed successfully
-- Count tiles, spot-check content
-- Fail loudly if verification fails
+1. **Database Atomicity is Critical** - Never write production data incrementally
+2. **Coordinate Systems Matter** - Understand where conversions happen
+3. **Fix at the Right Layer** - Downsampling algorithm wasn't the problem; viewer's conversion was
+4. **Test Complete Pipeline** - Pixel data can be correct but display wrong due to transformations
+5. **Keep Detailed Diagnostics** - Comparing pixel values helped identify real issue
 
 ---
 
 ## Implementation Status
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Temporary DB creation | ✅ DONE | Separate SQLite file |
-| Tile generation to temp | ✅ DONE | Incremental writes safe |
-| Verification logic | ✅ DONE | Count and integrity checks |
-| Atomic commit | ✅ DONE | Single transaction |
-| Cleanup on cancel | ✅ DONE | Temp file deleted |
-| Cleanup on error | ✅ DONE | Temp file deleted, DB rolled back |
-| Testing | ✅ DONE | All scenarios covered |
-
----
-
-## Future References
-
-If similar issues arise in other areas:
-
-1. **General principle**: Separate working state from production state
-2. **Pattern**: Temp storage → Verify → Atomic commit
-3. **Apply to**: Any operation that modifies persistent data
+| Problem | Status | Impact | Solution |
+|---------|--------|--------|----------|
+| Incomplete zoom orphans | ✅ FIXED | Prevents data corruption | Temp DB + atomic commit |
+| Tile count math | ✅ FIXED | Clean state tracking | Verification before commit |
+| Z9 vertical misalignment | ✅ FIXED | Correct map display | Compensate for viewer's TMS conversion |
 
 ---
 

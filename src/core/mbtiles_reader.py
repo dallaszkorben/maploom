@@ -391,6 +391,38 @@ class MBTilesReader:
             logger.error(f"Error reading tile Z{zoom}/{x}/{y}: {e}")
             return None
     
+    def tile_exists(self, zoom: int, x: int, y: int) -> bool:
+        """
+        Check if a tile exists in the database without reading its data.
+        
+        Used for sparse tile coverage checks during generation.
+        
+        Args:
+            zoom (int): Zoom level
+            x (int): Tile column (X coordinate)
+            y (int): Tile row (Y coordinate in TMS format)
+            
+        Returns:
+            bool: True if tile exists, False otherwise
+        """
+        try:
+            conn = sqlite3.connect(self.file_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT 1 FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=? LIMIT 1",
+                (zoom, x, y)
+            )
+            
+            result = cursor.fetchone() is not None
+            conn.close()
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error checking if tile Z{zoom}/{x}/{y} exists: {e}")
+            return False
+    
     
     def count_tiles_at_zoom(self, zoom_level: int) -> int:
         """

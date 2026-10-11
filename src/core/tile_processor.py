@@ -304,26 +304,43 @@ class TileProcessor:
             TileProcessorError: If resampling fails
         """
         try:
-            # Calculate source tile coordinates
-            source_tiles = [
-                (target_column * 2,     target_row * 2),      # top-left
-                (target_column * 2 + 1, target_row * 2),      # top-right
-                (target_column * 2,     target_row * 2 + 1),  # bottom-left
-                (target_column * 2 + 1, target_row * 2 + 1)   # bottom-right
+            # ✅ CRITICAL FIX: Account for TMS conversion in the viewer
+            # The viewer applies TMS conversion: tms_y = (2^zoom - 1) - y
+            # This means when the viewer displays a tile at position (x, y),
+            # it's actually retrieving tile at database coordinates (x, inverted_y)
+            #
+            # When we GENERATE Z9 tiles by downsampling Z10:
+            # - Z10 tiles are stored in database as (col, row) with row going 688-768
+            # - The viewer will apply TMS conversion when displaying
+            # - So we need to compose tiles in a way that compensates for this
+            #
+            # Normal downsampling would do:
+            #   (col*2, row*2), (col*2+1, row*2) at TOP
+            #   (col*2, row*2+1), (col*2+1, row*2+1) at BOTTOM
+            #
+            # But since the viewer will invert Y when displaying, we need to
+            # SWAP the top and bottom quadrants to compensate:
+            
+            # Fetch source tiles (standard math, as stored in database)
+            source_tiles_db = [
+                (target_column * 2,     target_row * 2),      
+                (target_column * 2 + 1, target_row * 2),      
+                (target_column * 2,     target_row * 2 + 1),  
+                (target_column * 2 + 1, target_row * 2 + 1)   
+            ]
+            
+            # But position them with TOP and BOTTOM swapped to compensate for viewer's TMS conversion
+            canvas_positions = [
+                (0, 256),      # DB top-left → canvas BOTTOM-left (gets inverted by viewer)
+                (256, 256),    # DB top-right → canvas BOTTOM-right
+                (0, 0),        # DB bottom-left → canvas TOP-left
+                (256, 0)       # DB bottom-right → canvas TOP-right
             ]
             
             # Create 512×512 canvas
             canvas = Image.new('RGB', (512, 512), (200, 200, 200))
             
-            # Fetch and place each source tile
-            positions = [
-                (0, 0),      # top-left
-                (256, 0),    # top-right
-                (0, 256),    # bottom-left
-                (256, 256)   # bottom-right
-            ]
-            
-            for i, (src_col, src_row) in enumerate(source_tiles):
+            for i, (src_col, src_row) in enumerate(source_tiles_db):
                 # Try to fetch tile from cache
                 try:
                     tile_data = self.cache.get(
@@ -341,8 +358,8 @@ class TileProcessor:
                     # Use placeholder if tile is corrupted
                     source_image = Image.new('RGB', (256, 256), (200, 200, 200))
                 
-                # Paste into canvas
-                canvas.paste(source_image, positions[i])
+                # Paste into canvas at the SWAPPED position
+                canvas.paste(source_image, canvas_positions[i])
             
             # Resample 512×512 to 256×256 using LANCZOS (best quality)
             output = canvas.resize((256, 256), Image.LANCZOS)
