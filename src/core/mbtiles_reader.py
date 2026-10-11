@@ -277,7 +277,6 @@ class MBTilesReader:
         self._load_zoom_levels()
         logger.info(f"Zoom levels refreshed: {self.get_available_zooms()}")
     
-    
     def get_metadata(self) -> MBTilesMetadata:
         """
         Get file metadata.
@@ -286,6 +285,43 @@ class MBTilesReader:
             MBTilesMetadata: File metadata
         """
         return self.metadata or MBTilesMetadata()
+    
+    def save_metadata(self) -> bool:
+        """
+        Save metadata back to the MBTiles file.
+        
+        Updates the metadata table with current metadata values.
+        Used when user updates center/zoom via recenter button.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.metadata:
+            logger.warning("No metadata to save")
+            return False
+        
+        try:
+            conn = sqlite3.connect(self.file_path)
+            cursor = conn.cursor()
+            
+            # Update center if it exists
+            if self.metadata.center:
+                lon, lat, zoom = self.metadata.center
+                center_str = f"{lon},{lat},{zoom}"
+                cursor.execute(
+                    "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
+                    ('center', center_str)
+                )
+                logger.info(f"Saved center to metadata: {center_str}")
+            
+            conn.commit()
+            conn.close()
+            logger.info("Metadata saved to MBTiles file")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving metadata: {e}", exc_info=True)
+            return False
     
     
     def get_zoom_levels(self) -> List[ZoomLevelInfo]:

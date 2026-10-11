@@ -269,6 +269,8 @@ class MainWindow(QMainWindow):
             # Load characteristics panel
             if self.characteristics_panel:
                 self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
+                # Connect recenter button to map viewer
+                self.characteristics_panel.recenter_requested.connect(self._on_recenter_requested)
             
             # Load provider and map viewer
             if self.mbtiles_provider:
@@ -338,17 +340,8 @@ class MainWindow(QMainWindow):
         # Step 1: Show zoom selection dialog
         generator = ZoomGenerator(self.mbtiles_reader)
         
-        # Check if there are gaps to fill
-        gaps = generator.analyze_gaps()
-        if not gaps:
-            QMessageBox.information(
-                self,
-                "No Missing Zooms",
-                "This MBTiles file has no missing zoom levels.\n\n"
-                "The following zooms are available:\n" +
-                str(sorted(self.mbtiles_reader.get_available_zooms()))
-            )
-            return
+        # ✅ REMOVED: No longer reject if there are no gaps
+        # Users can now regenerate existing zooms and generate outside current range
         
         # Show zoom selection dialog
         selection_dialog = ZoomSelectionDialog(generator, self)
@@ -474,9 +467,17 @@ class MainWindow(QMainWindow):
         if self.mbtiles_reader:
             self.mbtiles_reader.refresh_zoom_levels()
         
+        # ✅ Refresh provider's cached metadata (zoom range might have changed)
+        if self.mbtiles_provider:
+            self.mbtiles_provider.refresh_metadata()
+        
         # Refresh characteristics panel with updated zoom levels
         if self.characteristics_panel:
             self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
+        
+        # ✅ Reload map viewer to update zoom range (Z9 might have been added)
+        if self.map_viewer:
+            self.map_viewer.load_mbtiles(self.mbtiles_provider)
         
         # Generate next zoom if any
         self._generate_next_zoom()
@@ -494,6 +495,41 @@ class MainWindow(QMainWindow):
         # Show error (user can see full error in progress dialog)
         self.statusBar.showMessage(f"Error generating zoom level")
     
+    def _on_recenter_requested(self, lon: float, lat: float, zoom: int):
+        """
+        Handle recenter button click from characteristics panel.
+        
+        Sets current map center/zoom as new metadata center.
+        
+        Args:
+            lon: Current map longitude (for restoring if cancelled)
+            lat: Current map latitude (for restoring if cancelled)
+            zoom: Current map zoom (for restoring if cancelled)
+        """
+        if self.map_viewer:
+            # Get current map position
+            current_lon = self.map_viewer.center_lon
+            current_lat = self.map_viewer.center_lat
+            current_zoom = self.map_viewer.zoom_level
+            
+            # Update reader metadata with current position
+            if self.mbtiles_reader:
+                self.mbtiles_reader.metadata.center = (current_lon, current_lat, current_zoom)
+                # ✅ Save to MBTiles file
+                self.mbtiles_reader.save_metadata()
+                logger.info(f"Updated center to ({current_lon:.4f}°, {current_lat:.4f}°) at Z{current_zoom}")
+            
+            # ✅ Update map viewer's stored center (for recenter button)
+            self.map_viewer.metadata_center_lon = current_lon
+            self.map_viewer.metadata_center_lat = current_lat
+            self.map_viewer.metadata_center_zoom = current_zoom
+            
+            # Update reader in characteristics panel (refresh display)
+            if self.characteristics_panel:
+                self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
+            
+            # Update status
+            self.statusBar.showMessage(f"Center updated to ({current_lon:.2f}°, {current_lat:.2f}°) at Z{current_zoom}")
     
     def _on_generation_cancelled(self, thread, progress_dialog):
         """Handle user cancellation."""

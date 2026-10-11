@@ -86,26 +86,37 @@ class ZoomSelectionDialog(QDialog):
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout()
         
-        # Get missing zooms
+        # Get available zooms and determine reasonable range
         try:
-            missing_zooms = self.generator.analyze_gaps()
+            available_zooms = self.generator.reader.get_available_zooms()
+            min_zoom = min(available_zooms)
+            max_zoom = max(available_zooms)
+            
+            # Show full reasonable range: min-1 to max+1
+            # This includes zooms to downsample from (below min) and
+            # zooms that can be upsampled from (above max if needed)
+            all_zooms = list(range(max(0, min_zoom - 1), min(28, max_zoom + 2)))
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to analyze gaps: {e}")
-            missing_zooms = []
+            QMessageBox.warning(self, "Error", f"Failed to get zooms: {e}")
+            all_zooms = []
         
-        if missing_zooms:
-            title_label = QLabel("Missing Zoom Levels (select to generate):")
+        if all_zooms:
+            title_label = QLabel("Zoom Levels (select to generate or regenerate):")
             title_label_font = QFont()
             title_label_font.setBold(True)
             title_label.setFont(title_label_font)
             scroll_layout.addWidget(title_label)
             
-            for zoom in missing_zooms:
-                # Create checkbox for each missing zoom
+            available_zooms = self.generator.reader.get_available_zooms()
+            
+            for zoom in all_zooms:
+                # Create checkbox for each zoom
                 checkbox_widget = QWidget()
                 checkbox_layout = QHBoxLayout()
                 
-                checkbox = QCheckBox(f"Z{zoom}")
+                # Show if existing or missing
+                status = "✓ existing" if zoom in available_zooms else "○ missing"
+                checkbox = QCheckBox(f"Z{zoom} {status}")
                 checkbox.zoom_level = zoom
                 checkbox.stateChanged.connect(self._on_zoom_selected)
                 self.checkboxes[zoom] = checkbox
@@ -113,7 +124,7 @@ class ZoomSelectionDialog(QDialog):
                 # Try to create plan to show info/warnings
                 try:
                     plan = self.generator.create_generation_plan(zoom)
-                    info_text = f" ({plan.source_type}, {plan.tile_count:,} tiles"
+                    info_text = f" ({plan.tile_count:,} tiles"
                     
                     if plan.quality_warning:
                         info_text += f" ⚠️)"
@@ -125,7 +136,7 @@ class ZoomSelectionDialog(QDialog):
                         info_label.setToolTip(plan.quality_reason)
                     
                 except Exception as e:
-                    info_label = QLabel(f" (Error: {e})")
+                    info_label = QLabel(f" (Error: {str(e)[:50]})")
                 
                 checkbox_layout.addWidget(checkbox)
                 checkbox_layout.addWidget(info_label)
@@ -134,8 +145,8 @@ class ZoomSelectionDialog(QDialog):
                 
                 scroll_layout.addWidget(checkbox_widget)
         else:
-            no_gaps_label = QLabel("No missing zoom levels detected!")
-            scroll_layout.addWidget(no_gaps_label)
+            no_zooms_label = QLabel("No zoom levels available!")
+            scroll_layout.addWidget(no_zooms_label)
         
         scroll_layout.addStretch()
         scroll_widget.setLayout(scroll_layout)

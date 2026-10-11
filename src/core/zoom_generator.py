@@ -116,18 +116,9 @@ class ZoomGenerator:
             
         Returns:
             Source zoom level, or None if no suitable source exists
-            
-        Raises:
-            ZoomGeneratorError: If target zoom already exists
         """
         try:
             available_zooms = set(self.reader.get_available_zooms())
-            
-            # Check if target already exists
-            if target_zoom in available_zooms:
-                raise ZoomGeneratorError(
-                    f"Zoom level {target_zoom} already exists in file"
-                )
             
             if not available_zooms:
                 raise ZoomGeneratorError(
@@ -206,8 +197,9 @@ class ZoomGenerator:
         
         Checks:
         1. Zoom is within supported range (0-28)
-        2. Zoom doesn't already exist
-        3. A suitable source zoom exists
+        2. A suitable source zoom exists
+        
+        Note: Allows regenerating existing zoom levels and generating outside min/max range
         
         Args:
             target_zoom: The zoom level to validate
@@ -216,19 +208,11 @@ class ZoomGenerator:
             Tuple of (is_valid: bool, reason: str)
         """
         # Range check
-        if target_zoom < self.min_zoom or target_zoom > self.max_zoom:
+        if target_zoom < 0 or target_zoom > self.max_zoom:
             return False, (
                 f"Zoom level {target_zoom} out of range "
-                f"(must be {self.min_zoom}-{self.max_zoom})"
+                f"(must be 0-{self.max_zoom})"
             )
-        
-        # Check if already exists
-        try:
-            available_zooms = self.reader.get_available_zooms()
-            if target_zoom in available_zooms:
-                return False, f"Zoom level {target_zoom} already exists"
-        except Exception as e:
-            return False, f"Failed to check existing zooms: {e}"
         
         # Check if source exists
         try:

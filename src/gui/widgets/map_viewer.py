@@ -50,6 +50,11 @@ class MapViewer(QWidget):
         self.min_zoom = 1
         self.max_zoom = 20
         
+        # Stored center from metadata (for recenter button)
+        self.metadata_center_lon = 0
+        self.metadata_center_lat = 0
+        self.metadata_center_zoom = 10
+        
         # Pan state (for mouse dragging)
         self.pan_start_x = None
         self.pan_start_y = None
@@ -128,15 +133,25 @@ class MapViewer(QWidget):
             # Set initial zoom level
             self.zoom_level = (self.min_zoom + self.max_zoom) // 2
             
-            # Set center from metadata bounds or default
-            if metadata.bounds:
+            # Set center from metadata or bounds
+            if metadata.center:
+                # ✅ Use metadata center and zoom
+                self.center_lon = metadata.center[0]
+                self.center_lat = metadata.center[1]
+                self.zoom_level = metadata.center[2]
+                self.metadata_center_lon = metadata.center[0]
+                self.metadata_center_lat = metadata.center[1]
+                self.metadata_center_zoom = metadata.center[2]
+            elif metadata.bounds:
+                # Fallback to bounds center
                 west, south, east, north = metadata.bounds
                 self.center_lon = (west + east) / 2
                 self.center_lat = (south + north) / 2
-            elif metadata.center:
-                self.center_lon = metadata.center[0]
-                self.center_lat = metadata.center[1]
+                self.metadata_center_lon = self.center_lon
+                self.metadata_center_lat = self.center_lat
+                self.metadata_center_zoom = self.zoom_level
             else:
+                # Default to 0, 0
                 self.center_lat = 0
                 self.center_lon = 0
             
@@ -166,8 +181,28 @@ class MapViewer(QWidget):
             self.render_map()
     
     def recenter(self):
-        """Recenter to map center."""
-        logger.debug(f"Recentering map")
+        """
+        Recenter map to the metadata center point.
+        
+        Moves to center coordinates and zoom level stored in metadata.
+        """
+        self.center_lon = self.metadata_center_lon
+        self.center_lat = self.metadata_center_lat
+        self.zoom_level = self.metadata_center_zoom
+        logger.debug(f"Recentered to metadata center ({self.center_lon:.4f}, {self.center_lat:.4f}) at Z{self.zoom_level}")
+        self.render_map()
+    
+    def set_center(self, lon: float, lat: float):
+        """
+        Set map center to specific coordinates.
+        
+        Args:
+            lon: Longitude
+            lat: Latitude
+        """
+        self.center_lon = lon
+        self.center_lat = lat
+        logger.debug(f"Set center to ({lon:.4f}, {lat:.4f})")
         self.render_map()
     
     def mousePressEvent(self, event):

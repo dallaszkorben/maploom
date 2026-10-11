@@ -11,7 +11,7 @@ Date: 2026-10-11
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QLabel, QFrame,
     QGroupBox, QGridLayout, QListWidget, QListWidgetItem,
-    QHeaderView
+    QHeaderView, QPushButton, QHBoxLayout
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QIcon
@@ -20,6 +20,36 @@ import logging
 
 
 logger = logging.getLogger(__name__)
+
+# ✅ Configuration for coordinate display
+COORDINATE_FORMAT = 'dms'  # 'dms' for degree/minute/second, 'dd' for decimal degrees
+DECIMAL_PLACES = 6  # Used when coordinate_format='dd'
+
+
+def format_coordinate(value: float, format_type: str = 'dms', decimals: int = 6) -> str:
+    """
+    Format a coordinate value as DMS or decimal degrees.
+    
+    Args:
+        value: Coordinate value in decimal degrees
+        format_type: 'dms' for degree/minute/second, 'dd' for decimal degrees
+        decimals: Number of decimal places (used for 'dd' format)
+        
+    Returns:
+        Formatted coordinate string
+    """
+    if format_type == 'dd':
+        return f"{value:.{decimals}f}°"
+    else:  # dms
+        # Convert decimal degrees to DMS
+        sign = 1 if value >= 0 else -1
+        value = abs(value)
+        degrees = int(value)
+        minutes_float = (value - degrees) * 60
+        minutes = int(minutes_float)
+        seconds = (minutes_float - minutes) * 60
+        
+        return f"{sign * degrees}°{minutes}'{seconds:.2f}\""
 
 
 class ZoomLevelItem(QListWidgetItem):
@@ -73,6 +103,8 @@ class CharacteristicsPanel(QWidget):
     """
     
     zoom_selected = pyqtSignal(int)  # Emitted when zoom level is selected
+    center_requested = pyqtSignal(float, float)  # Emitted when center button clicked (lon, lat)
+    recenter_requested = pyqtSignal(float, float, int)  # Emitted when recenter button clicked (lon, lat, zoom)
     
     def __init__(self, parent=None):
         """Initialize characteristics panel."""
@@ -161,12 +193,24 @@ class CharacteristicsPanel(QWidget):
         bounds_layout = QGridLayout(bounds_group)
         
         self.bounds_label = self._create_info_label()
+        
+        # Center layout with label and button
+        center_widget = QWidget()
+        center_item_layout = QHBoxLayout(center_widget)
+        center_item_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.center_label = self._create_info_label()
+        self.recenter_button = QPushButton("Update")
+        self.recenter_button.setMaximumWidth(60)
+        self.recenter_button.setEnabled(False)
+        
+        center_item_layout.addWidget(self.center_label)
+        center_item_layout.addWidget(self.recenter_button)
         
         bounds_layout.addWidget(QLabel("Bounds:"), 0, 0, Qt.AlignRight)
         bounds_layout.addWidget(self.bounds_label, 0, 1)
-        bounds_layout.addWidget(QLabel("Center:"), 1, 0, Qt.AlignRight)
-        bounds_layout.addWidget(self.center_label, 1, 1)
+        bounds_layout.addWidget(QLabel("Default Center:"), 1, 0, Qt.AlignRight)
+        bounds_layout.addWidget(center_widget, 1, 1)
         
         bounds_layout.setColumnStretch(1, 1)
         container_layout.addWidget(bounds_group)
@@ -259,19 +303,30 @@ class CharacteristicsPanel(QWidget):
         self.type_label.setText(metadata.type or "baselayer")
         self.version_label.setText(metadata.version if metadata.version else "(not set in file)")
         
-        # Update bounds
+        # Update bounds (formatted according to coordinate_format)
         if metadata.bounds:
             west, south, east, north = metadata.bounds
-            self.bounds_label.setText(f"W:{west:.2f}° S:{south:.2f}° E:{east:.2f}° N:{north:.2f}°")
+            west_str = format_coordinate(west, COORDINATE_FORMAT, DECIMAL_PLACES)
+            south_str = format_coordinate(south, COORDINATE_FORMAT, DECIMAL_PLACES)
+            east_str = format_coordinate(east, COORDINATE_FORMAT, DECIMAL_PLACES)
+            north_str = format_coordinate(north, COORDINATE_FORMAT, DECIMAL_PLACES)
+            self.bounds_label.setText(f"W:{west_str} S:{south_str} E:{east_str} N:{north_str}")
         else:
             self.bounds_label.setText("(not set in file)")
         
-        # Update center
+        # Update center (formatted according to coordinate_format)
         if metadata.center:
             lon, lat, zoom = metadata.center
-            self.center_label.setText(f"({lon:.2f}°, {lat:.2f}°) at Z{zoom}")
+            lon_str = format_coordinate(lon, COORDINATE_FORMAT, DECIMAL_PLACES)
+            lat_str = format_coordinate(lat, COORDINATE_FORMAT, DECIMAL_PLACES)
+            self.center_label.setText(f"({lon_str}, {lat_str}) at Z{zoom}")
+            self.recenter_button.setEnabled(True)
+            # Store center coordinates for button callback
+            self.recenter_button.clicked.disconnect() if self.recenter_button.receivers(self.recenter_button.clicked) > 0 else None
+            self.recenter_button.clicked.connect(lambda: self.recenter_requested.emit(lon, lat, zoom))
         else:
             self.center_label.setText("(not set in file)")
+            self.recenter_button.setEnabled(False)
         
         # Update zoom levels
         self.zoom_list.clear()

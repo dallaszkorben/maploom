@@ -781,6 +781,22 @@ class MBTilesProvider:
                 self._metadata = None
                 self._loaded_path = None
     
+    def refresh_metadata(self) -> None:
+        """
+        Reload metadata from the database.
+        
+        Call this after generating new zoom levels to update cached metadata
+        with new min_zoom/max_zoom values from the tiles table.
+        
+        Raises:
+            RuntimeError: If no file is currently loaded
+        """
+        if not self.is_loaded():
+            raise RuntimeError("No mbtiles file loaded")
+        
+        self._metadata = self._load_metadata()
+        self.logger.info(f"Refreshed metadata: zoom now {self._metadata.min_zoom}-{self._metadata.max_zoom}")
+    
     def __del__(self) -> None:
         """
         Destructor: ensure database connection is closed.
