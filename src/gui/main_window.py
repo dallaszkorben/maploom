@@ -17,15 +17,20 @@ from PyQt5.QtWidgets import (
     QSplitter, QMessageBox, QFileDialog, QMenu, QToolBar, QPushButton,
     QStatusBar
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QIcon
 import logging
 from pathlib import Path
 from typing import Optional
 from src.core.mbtiles_reader import MBTilesReader
+from src.core.zoom_generator import ZoomGenerator
+from src.core.tile_processor import TileProcessor
+from src.core.zoom_generation_worker import ZoomGenerationWorker
 from src.map.mbtiles_provider import MBTilesProvider
 from src.gui.widgets.characteristics_panel import CharacteristicsPanel
 from src.gui.widgets.map_viewer import MapViewer
+from src.gui.dialogs.zoom_selection_dialog import ZoomSelectionDialog
+from src.gui.dialogs.zoom_generation_progress_dialog import ZoomGenerationProgressDialog
 from config.app_config import AppConfig
 
 
@@ -147,6 +152,14 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut("Ctrl+Q")
         exit_action.triggered.connect(self.close)
         
+        # Tools menu (new)
+        tools_menu = menubar.addMenu("&Tools")
+        
+        self.generate_zoom_action = tools_menu.addAction("&Generate Zoom Levels")
+        self.generate_zoom_action.setShortcut("Ctrl+G")
+        self.generate_zoom_action.triggered.connect(self.start_zoom_generation)
+        self.generate_zoom_action.setEnabled(False)  # Disabled until file loaded
+        
         # Help menu
         help_menu = menubar.addMenu("&Help")
         
@@ -165,6 +178,14 @@ class MainWindow(QMainWindow):
         open_button = QPushButton("📁 Open MBTiles File")
         open_button.clicked.connect(self.open_file_dialog)
         toolbar.addWidget(open_button)
+        
+        toolbar.addSeparator()
+        
+        # Generate zoom button (new)
+        self.generate_button = QPushButton("⚙️ Generate Zoom Levels")
+        self.generate_button.clicked.connect(self.start_zoom_generation)
+        self.generate_button.setEnabled(False)  # Disabled until file loaded
+        toolbar.addWidget(self.generate_button)
         
         toolbar.addSeparator()
         
@@ -235,6 +256,10 @@ class MainWindow(QMainWindow):
             self.toolbar_status.setText(f"Loaded: {path.name}")
             self.statusBar.showMessage(f"Loaded: {file_path}")
             
+            # Enable zoom generation button
+            self.generate_button.setEnabled(True)
+            self.generate_zoom_action.setEnabled(True)
+            
             # Load characteristics panel
             if self.characteristics_panel:
                 self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
@@ -292,6 +317,188 @@ class MainWindow(QMainWindow):
         if file_path:
             logger.info(f"File dialog selected: {file_path}")
             self.load_mbtiles_file(file_path)
+    
+    
+    def start_zoom_generation(self):
+        """Start zoom level generation workflow."""
+        if not self.mbtiles_reader:
+            QMessageBox.warning(
+                self,
+                "No File Loaded",
+                "Please open an MBTiles file first."
+            )
+            return
+        
+        # Step 1: Show zoom selection dialog
+        generator = ZoomGenerator(self.mbtiles_reader)
+        
+        # Check if there are gaps to fill
+        gaps = generator.analyze_gaps()
+        if not gaps:
+            QMessageBox.information(
+                self,
+                "No Missing Zooms",
+                "This MBTiles file has no missing zoom levels.\n\n"
+                "The following zooms are available:\n" +
+                str(sorted(self.mbtiles_reader.get_available_zooms()))
+            )
+            return
+        
+        # Show zoom selection dialog
+        selection_dialog = ZoomSelectionDialog(generator, self)
+        if selection_dialog.exec_() != ZoomSelectionDialog.Accepted:
+            return  # User cancelled
+        
+        selected_zooms = selection_dialog.get_selected_zooms()
+        if not selected_zooms:
+            return
+        
+        # Step 2: Generate selected zooms (in sequence)
+        logger.info(f"Starting generation for zooms: {selected_zooms}")
+        
+        self.generator = generator
+        self.selected_zooms = selected_zooms
+        self.zoom_index = 0
+        
+        # Generate first zoom
+        self._generate_next_zoom()
+    
+    
+    def _generate_next_zoom(self):
+        """Generate the next zoom in the sequence."""
+        if self.zoom_index >= len(self.selected_zooms):
+            # All zooms generated
+            QMessageBox.information(
+                self,
+                "Generation Complete",
+                f"Successfully generated {len(self.selected_zooms)} zoom levels."
+            )
+            
+            # Refresh characteristics panel
+            if self.characteristics_panel:
+                self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
+            
+            self.statusBar.showMessage("All zoom levels generated successfully")
+            return
+        
+        target_zoom = self.selected_zooms[self.zoom_index]
+        self.zoom_index += 1
+        
+        self._generate_single_zoom_threaded(target_zoom)
+    
+    
+    def _generate_single_zoom_threaded(self, target_zoom):
+        """
+        Generate a single zoom level in background thread.
+        
+        Args:
+            target_zoom: Zoom level to generate
+        """
+        try:
+            # Create generation plan
+            plan = self.generator.create_generation_plan(target_zoom)
+            
+            # Create processor
+            processor = TileProcessor(self.mbtiles_reader, self.current_file)
+            
+            # Create progress dialog
+            progress_dialog = ZoomGenerationProgressDialog(self, target_zoom, plan.tile_count)
+            progress_dialog.start_generation(target_zoom, plan.tile_count)
+            
+            # Store dialog for later reference
+            self.current_progress_dialog = progress_dialog
+            
+            # Create worker and thread
+            worker = ZoomGenerationWorker(processor, plan, target_zoom)
+            thread = QThread()
+            worker.moveToThread(thread)
+            
+            # Connect signals
+            worker.progress.connect(progress_dialog.update_progress)
+            worker.finished.connect(lambda: self._on_generation_finished(thread, progress_dialog))
+            worker.error.connect(lambda err: self._on_generation_error(thread, progress_dialog, err))
+            worker.cancelled.connect(lambda: self._on_generation_cancelled(thread, progress_dialog))
+            
+            # Connect cancel button
+            def on_cancel():
+                worker.cancel()
+            progress_dialog.cancel_button.clicked.disconnect()
+            progress_dialog.cancel_button.clicked.connect(on_cancel)
+            
+            # Start thread
+            thread.started.connect(worker.run)
+            thread.start()
+            
+            # Store thread for cleanup
+            self.generation_thread = thread
+            self.generation_worker = worker
+            
+            # Show progress dialog (modal, but thread runs in background)
+            progress_dialog.exec_()
+        
+        except Exception as e:
+            logger.error(f"Error starting generation: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "Generation Error",
+                f"Failed to start generation:\n{str(e)}"
+            )
+    
+    
+    def _on_generation_finished(self, thread, progress_dialog):
+        """Handle successful generation completion."""
+        logger.info("Generation finished successfully")
+        progress_dialog.finish_success()
+        
+        # Stop thread
+        thread.quit()
+        thread.wait()
+        
+        # Update UI
+        self.statusBar.showMessage(f"Successfully generated zoom level")
+        
+        # ✅ Mark the generated zoom level in the reader
+        # This ensures the UI shows "Generated" instead of "Original"
+        target_zoom = progress_dialog.target_zoom if hasattr(progress_dialog, 'target_zoom') else None
+        if target_zoom and self.mbtiles_reader:
+            self.mbtiles_reader.mark_zoom_as_generated(target_zoom)
+            logger.info(f"Marked Z{target_zoom} as generated in reader")
+        
+        # ✅ Refresh reader's cached zoom levels from database
+        if self.mbtiles_reader:
+            self.mbtiles_reader.refresh_zoom_levels()
+        
+        # Refresh characteristics panel with updated zoom levels
+        if self.characteristics_panel:
+            self.characteristics_panel.load_mbtiles(self.mbtiles_reader)
+        
+        # Generate next zoom if any
+        self._generate_next_zoom()
+    
+    
+    def _on_generation_error(self, thread, progress_dialog, error_message):
+        """Handle generation error."""
+        logger.error(f"Generation error: {error_message}")
+        progress_dialog.finish_error(error_message)
+        
+        # Stop thread
+        thread.quit()
+        thread.wait()
+        
+        # Show error (user can see full error in progress dialog)
+        self.statusBar.showMessage(f"Error generating zoom level")
+    
+    
+    def _on_generation_cancelled(self, thread, progress_dialog):
+        """Handle user cancellation."""
+        logger.info("Generation cancelled by user")
+        progress_dialog.finish_cancelled()
+        
+        # Stop thread
+        thread.quit()
+        thread.wait()
+        
+        self.statusBar.showMessage("Generation cancelled")
 
     
     

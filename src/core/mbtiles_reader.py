@@ -91,6 +91,7 @@ class MBTilesReader:
         
         self._validate_file()
         self._load_metadata()
+        self._load_generated_zooms()  # ✅ Load generated zoom markers from metadata
         self._load_zoom_levels()
         
         logger.info(f"Loaded MBTiles file: {self.file_path}")
@@ -194,6 +195,44 @@ class MBTilesReader:
             logger.error(f"Error loading metadata: {e}", exc_info=True)
             self.metadata = MBTilesMetadata()
     
+    def _load_generated_zooms(self) -> None:
+        """
+        Load which zoom levels were generated (stored in metadata).
+        
+        Generated zooms are marked with metadata entries like:
+            generated_zoom_9 = true
+        
+        This ensures that when the file is reloaded, we know which zooms
+        were generated vs original.
+        """
+        try:
+            conn = sqlite3.connect(self.file_path)
+            cursor = conn.cursor()
+            
+            # Get all metadata entries starting with "generated_zoom_"
+            cursor.execute(
+                "SELECT name FROM metadata WHERE name LIKE 'generated_zoom_%'"
+            )
+            
+            self._generated_zooms = set()
+            for (name,) in cursor.fetchall():
+                # Extract zoom number from "generated_zoom_9" -> 9
+                try:
+                    zoom_str = name.replace('generated_zoom_', '')
+                    zoom = int(zoom_str)
+                    self._generated_zooms.add(zoom)
+                except (ValueError, AttributeError):
+                    logger.warning(f"Could not parse generated zoom marker: {name}")
+            
+            conn.close()
+            
+            if self._generated_zooms:
+                logger.debug(f"Loaded generated zooms: {sorted(self._generated_zooms)}")
+            
+        except Exception as e:
+            logger.error(f"Error loading generated zooms: {e}", exc_info=True)
+            self._generated_zooms = set()
+    
     
     def _load_zoom_levels(self) -> None:
         """Load available zoom levels from tiles table."""
@@ -226,6 +265,17 @@ class MBTilesReader:
         except Exception as e:
             logger.error(f"Error loading zoom levels: {e}", exc_info=True)
             self.zoom_levels = []
+    
+    def refresh_zoom_levels(self) -> None:
+        """
+        Refresh zoom levels from database.
+        
+        Call this after generating new zoom levels to update the cached list.
+        This reloads all available zoom levels from the tiles table.
+        """
+        logger.info("Refreshing zoom levels from database...")
+        self._load_zoom_levels()
+        logger.info(f"Zoom levels refreshed: {self.get_available_zooms()}")
     
     
     def get_metadata(self) -> MBTilesMetadata:
@@ -340,6 +390,76 @@ class MBTilesReader:
         except Exception as e:
             logger.error(f"Error reading tile Z{zoom}/{x}/{y}: {e}")
             return None
+    
+    
+    def count_tiles_at_zoom(self, zoom_level: int) -> int:
+        """
+        Count actual tiles at a specific zoom level.
+        
+        This is used for sparse/regional MBTiles files to determine how many
+        tiles need to be generated (not the mathematical 4^zoom formula).
+        
+        Args:
+            zoom_level (int): The zoom level to count tiles for
+            
+        Returns:
+            int: Number of tiles at that zoom level
+        """
+        try:
+            conn = sqlite3.connect(self.file_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                "SELECT COUNT(*) FROM tiles WHERE zoom_level = ?",
+                (zoom_level,)
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else 0
+            
+        except Exception as e:
+            logger.error(f"Error counting tiles at zoom {zoom_level}: {e}")
+            return 0
+    
+    def get_tile_bounds(self, zoom_level: int) -> Tuple[int, int, int, int]:
+        """
+        Get the bounding box of tiles at a specific zoom level.
+        
+        Returns min/max tile column and row coordinates for the given zoom level.
+        This is critical for sparse MBTiles files to determine actual coverage area.
+        
+        Args:
+            zoom_level (int): The zoom level to get bounds for
+            
+        Returns:
+            Tuple[int, int, int, int]: (min_col, max_col, min_row, max_row)
+                Returns (0, 0, 0, 0) if no tiles exist
+        """
+        try:
+            conn = sqlite3.connect(self.file_path)
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """SELECT 
+                    MIN(tile_column) as min_col, MAX(tile_column) as max_col,
+                    MIN(tile_row) as min_row, MAX(tile_row) as max_row
+                   FROM tiles WHERE zoom_level = ?""",
+                (zoom_level,)
+            )
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result and result[0] is not None:
+                return tuple(result)
+            else:
+                return (0, 0, 0, 0)
+            
+        except Exception as e:
+            logger.error(f"Error getting tile bounds at zoom {zoom_level}: {e}")
+            return (0, 0, 0, 0)
     
     
     def mark_zoom_as_generated(self, zoom: int) -> None:
