@@ -13,7 +13,7 @@ import io
 from PyQt5.QtWidgets import QWidget, QLabel, QPushButton, QVBoxLayout
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from src.map.map_renderer import MapRenderer
 from src.map.mbtiles_provider import MBTilesProvider
@@ -448,7 +448,22 @@ class MapViewer(QWidget):
         bbox = [x_pos, y_pos, x_pos + button_size, y_pos + button_size]
         draw.rounded_rectangle(bbox, radius=corner_radius, fill=button_bg)
         zoom_text = f"Z:{self.zoom_level}"
-        draw.text((x_pos + 4, y_pos + 10), zoom_text, fill=button_text)
+        
+        # Use a slightly larger font for better visibility
+        try:
+            # Try to use a system font at 13pt
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
+        except (IOError, OSError):
+            # Fallback to default font if truetype unavailable
+            font = ImageFont.load_default()
+        
+        # Center the text both horizontally and vertically
+        text_bbox = draw.textbbox((0, 0), zoom_text, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+        text_x = x_pos + (button_size - text_width) // 2
+        text_y = y_pos + (button_size - text_height) // 2 - 3  # Offset 3 pixels upward
+        draw.text((text_x, text_y), zoom_text, font=font, fill=button_text)
         
         # Composite overlay
         result = Image.alpha_composite(pil_image, overlay)

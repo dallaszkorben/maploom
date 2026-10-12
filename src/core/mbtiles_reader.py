@@ -291,7 +291,7 @@ class MBTilesReader:
         Save metadata back to the MBTiles file.
         
         Updates the metadata table with current metadata values.
-        Used when user updates center/zoom via recenter button.
+        Saves: name, description, center, and other fields.
         
         Returns:
             True if successful, False otherwise
@@ -304,7 +304,23 @@ class MBTilesReader:
             conn = sqlite3.connect(self.file_path)
             cursor = conn.cursor()
             
-            # Update center if it exists
+            # Save name
+            if self.metadata.name:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
+                    ('name', self.metadata.name)
+                )
+                logger.debug(f"Saved name: {self.metadata.name}")
+            
+            # Save description
+            if self.metadata.description:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
+                    ('description', self.metadata.description)
+                )
+                logger.debug(f"Saved description: {self.metadata.description}")
+            
+            # Save center
             if self.metadata.center:
                 lon, lat, zoom = self.metadata.center
                 center_str = f"{lon},{lat},{zoom}"
@@ -312,7 +328,7 @@ class MBTilesReader:
                     "INSERT OR REPLACE INTO metadata (name, value) VALUES (?, ?)",
                     ('center', center_str)
                 )
-                logger.info(f"Saved center to metadata: {center_str}")
+                logger.debug(f"Saved center: {center_str}")
             
             conn.commit()
             conn.close()

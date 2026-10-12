@@ -11,9 +11,9 @@ Date: 2026-10-11
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QScrollArea, QLabel, QFrame,
     QGroupBox, QGridLayout, QListWidget, QListWidgetItem,
-    QHeaderView, QPushButton, QHBoxLayout
+    QHeaderView, QPushButton, QHBoxLayout, QLineEdit
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QColor, QIcon
 from src.core.mbtiles_reader import MBTilesReader, MBTilesMetadata
 import logging
@@ -72,23 +72,25 @@ class ZoomLevelItem(QListWidgetItem):
         status = "✓ Original" if zoom_level_info.is_original else "◆ Generated"
         
         text = f"Z{zoom:2d}  {tiles:>6,} tiles  {status}"
-        self.setText(text)
         
-        # Use monospace font
-        font = QFont("Courier")
-        font.setPointSize(9)
-        self.setFont(font)
+        # Create a label widget with center alignment
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
         
-        # Color-code (use white/light colors for visibility)
-        if zoom_level_info.is_original:
-            self.setForeground(QColor("#FFFFFF"))  # White for original
-        else:
-            self.setForeground(QColor("#66CCFF"))  # Light blue for generated
-        
-        # Use smaller font for generated
+        # Set font
+        font = QFont("Courier", 9)
         if not zoom_level_info.is_original:
             font.setItalic(True)
-            self.setFont(font)
+        label.setFont(font)
+        
+        # Set color
+        color = "#FFFFFF" if zoom_level_info.is_original else "#66CCFF"
+        label.setStyleSheet(f"QLabel {{ color: {color}; }}")
+        
+        self.setText("")  # Clear item text, will use widget instead
+        
+        # Store zoom for later retrieval
+        self.setData(Qt.UserRole, zoom)
 
 
 class CharacteristicsPanel(QWidget):
@@ -105,6 +107,7 @@ class CharacteristicsPanel(QWidget):
     zoom_selected = pyqtSignal(int)  # Emitted when zoom level is selected
     center_requested = pyqtSignal(float, float)  # Emitted when center button clicked (lon, lat)
     recenter_requested = pyqtSignal(float, float, int)  # Emitted when recenter button clicked (lon, lat, zoom)
+    metadata_updated = pyqtSignal()  # Emitted when name/description is updated
     
     def __init__(self, parent=None):
         """Initialize characteristics panel."""
@@ -168,16 +171,58 @@ class CharacteristicsPanel(QWidget):
         file_info_group = QGroupBox("File Information")
         file_info_layout = QGridLayout(file_info_group)
         
-        self.name_label = self._create_info_label()
-        self.description_label = self._create_info_label()
+        # Name row with Save button
+        name_widget = QWidget()
+        name_layout = QHBoxLayout(name_widget)
+        name_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.name_input = QLineEdit()
+        self.name_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e1e1e;
+                color: #FFFFFF;
+                border: 1px solid #444444;
+                padding: 4px;
+            }
+        """)
+        
+        self.save_name_button = QPushButton("Save")
+        self.save_name_button.setMaximumWidth(50)
+        self.save_name_button.clicked.connect(self._on_save_name)
+        
+        name_layout.addWidget(self.name_input)
+        name_layout.addWidget(self.save_name_button)
+        
+        # Description row with Save button
+        desc_widget = QWidget()
+        desc_layout = QHBoxLayout(desc_widget)
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.description_input = QLineEdit()
+        self.description_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e1e1e;
+                color: #FFFFFF;
+                border: 1px solid #444444;
+                padding: 4px;
+            }
+        """)
+        
+        self.save_description_button = QPushButton("Save")
+        self.save_description_button.setMaximumWidth(50)
+        self.save_description_button.clicked.connect(self._on_save_description)
+        
+        desc_layout.addWidget(self.description_input)
+        desc_layout.addWidget(self.save_description_button)
+        
         self.format_label = self._create_info_label()
         self.type_label = self._create_info_label()
         self.version_label = self._create_info_label()
         
         file_info_layout.addWidget(QLabel("Name:"), 0, 0, Qt.AlignRight)
-        file_info_layout.addWidget(self.name_label, 0, 1)
+        file_info_layout.addWidget(name_widget, 0, 1)
         file_info_layout.addWidget(QLabel("Description:"), 1, 0, Qt.AlignRight)
-        file_info_layout.addWidget(self.description_label, 1, 1)
+        file_info_layout.addWidget(desc_widget, 1, 1)
         file_info_layout.addWidget(QLabel("Format:"), 2, 0, Qt.AlignRight)
         file_info_layout.addWidget(self.format_label, 2, 1)
         file_info_layout.addWidget(QLabel("Type:"), 3, 0, Qt.AlignRight)
@@ -218,13 +263,6 @@ class CharacteristicsPanel(QWidget):
         # Zoom Levels Section
         zoom_group = QGroupBox("Zoom Levels")
         zoom_layout = QVBoxLayout(zoom_group)
-        
-        zoom_info = QLabel(
-            "✓ Original - Available in file\n"
-            "◆ Generated - Created by MapLoom"
-        )
-        zoom_info.setStyleSheet("color: #CCCCCC;")
-        zoom_layout.addWidget(zoom_info)
         
         self.zoom_list = QListWidget()
         self.zoom_list.setMinimumHeight(150)
@@ -296,9 +334,15 @@ class CharacteristicsPanel(QWidget):
         # Get metadata
         metadata = reader.get_metadata()
         
-        # Update file info
-        self.name_label.setText(metadata.name or "Unknown")
-        self.description_label.setText(metadata.description if metadata.description else "(not set in file)")
+        # Update file info (populate editable fields)
+        self.name_input.blockSignals(True)
+        self.name_input.setText(metadata.name or "")
+        self.name_input.blockSignals(False)
+        
+        self.description_input.blockSignals(True)
+        self.description_input.setText(metadata.description or "")
+        self.description_input.blockSignals(False)
+        
         self.format_label.setText(metadata.format or "unknown")
         self.type_label.setText(metadata.type or "baselayer")
         self.version_label.setText(metadata.version if metadata.version else "(not set in file)")
@@ -333,6 +377,29 @@ class CharacteristicsPanel(QWidget):
         for zoom_info in reader.get_zoom_levels():
             item = ZoomLevelItem(zoom_info)
             self.zoom_list.addItem(item)
+            
+            # Create centered label widget
+            zoom = zoom_info.zoom
+            tiles = zoom_info.tile_count
+            status = "✓ Original" if zoom_info.is_original else "◆ Generated"
+            text = f"Z{zoom:2d}  {tiles:>6,} tiles  {status}"
+            
+            label = QLabel(text)
+            label.setAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            
+            font = QFont("Courier", 9)
+            if not zoom_info.is_original:
+                font.setItalic(True)
+            label.setFont(font)
+            
+            color = "#FFFFFF" if zoom_info.is_original else "#66CCFF"
+            label.setStyleSheet(f"QLabel {{ color: {color}; padding: 8px; }}")
+            
+            # Set fixed item height for consistent spacing
+            item.setSizeHint(QSize(400, 32))
+            
+            # Set the label as the item widget
+            self.zoom_list.setItemWidget(item, label)
         
         # Update statistics
         stats = reader.get_file_statistics()
@@ -363,18 +430,38 @@ class CharacteristicsPanel(QWidget):
     def _on_zoom_selected(self) -> None:
         """Handle zoom level selection."""
         current = self.zoom_list.currentItem()
-        if current and isinstance(current, ZoomLevelItem):
-            zoom = current.zoom_info.zoom
-            self.zoom_selected.emit(zoom)
-            logger.debug(f"Zoom selected: {zoom}")
+        if current:
+            zoom = current.data(Qt.UserRole)
+            if zoom:
+                self.zoom_selected.emit(zoom)
+                logger.debug(f"Zoom selected: {zoom}")
     
+    def _on_save_name(self) -> None:
+        """Handle save button click for Name field."""
+        if self.mbtiles_reader:
+            self.mbtiles_reader.metadata.name = self.name_input.text()
+            if self.mbtiles_reader.save_metadata():
+                logger.info(f"Name saved: {self.name_input.text()}")
+                self.metadata_updated.emit()
+            else:
+                logger.error("Failed to save name")
+    
+    def _on_save_description(self) -> None:
+        """Handle save button click for Description field."""
+        if self.mbtiles_reader:
+            self.mbtiles_reader.metadata.description = self.description_input.text()
+            if self.mbtiles_reader.save_metadata():
+                logger.info(f"Description saved: {self.description_input.text()}")
+                self.metadata_updated.emit()
+            else:
+                logger.error("Failed to save description")
     
     def clear(self) -> None:
         """Clear all displayed information."""
         self.mbtiles_reader = None
         
-        self.name_label.setText("—")
-        self.description_label.setText("—")
+        self.name_input.setText("—")
+        self.description_input.setText("—")
         self.format_label.setText("—")
         self.type_label.setText("—")
         self.version_label.setText("—")
